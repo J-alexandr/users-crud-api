@@ -10,8 +10,7 @@ import org.mongodb.scala.MongoClient.DEFAULT_CODEC_REGISTRY
 import org.mongodb.scala.bson.codecs.Macros
 import org.mongodb.scala.bson.conversions
 import org.mongodb.scala.model.Sorts.{ascending, descending}
-import org.mongodb.scala.result.DeleteResult
-import org.mongodb.scala.{Completed, Document, MongoClient, Observer}
+import org.mongodb.scala.{Completed, Document, MongoClient}
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
@@ -23,7 +22,7 @@ object UserRepository {
   private val usersCollection = client.getDatabase("usersDb").getCollection("users")
   private val codecRegistry: CodecRegistry = fromRegistries(fromProviders(Macros.createCodecProvider[User]()), DEFAULT_CODEC_REGISTRY)
 
-  def save(user: User): Unit = {
+  def insert(user: User): Future[Boolean] = {
     val document: Document = Document(
       "id" -> user.id,
       "username" -> user.username,
@@ -31,11 +30,26 @@ object UserRepository {
     )
 
     usersCollection.insertOne(document)
-      .subscribe(new Observer[Completed] {
-        override def onNext(result: Completed): Unit = println(s"User inserted: ${result}")
-        override def onError(e: Throwable): Unit = println(s"Error inserting user: $e")
-        override def onComplete(): Unit = println("Insert completed")
-      })
+      .toFuture()
+      .map {
+        case Completed() => true
+        case _ => false
+      }
+  }
+
+  def updateAge(user: User, age: Int): Future[Boolean] = {
+    val filter: Document = Document(
+      "id" -> user.id
+    )
+    val document: Document = Document(
+      "id" -> user.id,
+      "username" -> user.username,
+      "age" -> age
+    )
+
+    usersCollection.replaceOne(filter, document)
+      .toFuture()
+      .map(result => result.getModifiedCount > 0)
   }
 
   def getAll(sort: Option[String]): Future[Seq[User]] = {
@@ -70,13 +84,10 @@ object UserRepository {
       }
   }
 
-  def delete(id: String): Unit = {
+  def delete(id: String): Future[Boolean] = {
     usersCollection.deleteOne(Filters.eq("id", id))
-      .subscribe(new Observer[DeleteResult] {
-        override def onNext(result: DeleteResult): Unit = println(s"Users deleted: ${result.getDeletedCount}")
-        override def onError(e: Throwable): Unit = println(s"Error deleting user: $e")
-        override def onComplete(): Unit = println("Delete completed")
-      })
+      .toFuture()
+      .map(result => result.getDeletedCount > 0)
   }
 
   private def convertToUser(document: Document): User = {
