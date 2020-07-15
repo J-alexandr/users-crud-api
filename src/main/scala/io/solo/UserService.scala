@@ -2,47 +2,74 @@ package io.solo
 
 import java.util.UUID.randomUUID
 
-import scala.concurrent.Await
-import scala.concurrent.duration._
+import cats.effect.{ContextShift, IO}
+import io.solo.UserRoutes.CreateUserDto
+import org.slf4j.LoggerFactory
+
+import scala.concurrent.{ExecutionContext, Future}
 
 object UserService {
 
-  private val defaultWaitDuration: Duration = 5 second
+  implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.global)
 
-  def create(username: String, age: Int): Option[User] = {
-    val optUser: Option[User] = Await.result(UserRepository.getByUsername(username), defaultWaitDuration)
-    optUser match {
-      case Some(_) => None
-      case None =>
-        val uuid = randomUUID().toString
-        Some[User](insert(uuid, username, age))
-    }
+  def logger = LoggerFactory.getLogger(this.getClass)
+
+  def create(user: CreateUserDto): IO[Either[String, User]] = {
+    logger.info(s"Creating new user $user")
+    futureToIo(UserRepository.getByUsername(user.username))
+      .flatMap {
+        case None => insert(randomUUID().toString, user.username, user.age)
+          .map {
+            case Some(user) => Right(user)
+            case None => Left("User was not created")
+          }
+        case Some(_) => IO(Left("Username already in use"))
+      }
   }
 
-  private def insert(uuid: String, username: String, age: Int): User = {
-    val user = User(uuid, username, age)
-    UserRepository.save(user)
-    user
+  private def insert(id: String, username: String, age: Int): IO[Option[User]] = {
+    val user = User(id, username, age)
+    futureToIo(UserRepository.insert(user))
+      .map(inserted => if (inserted) Some(user) else None)
   }
 
-  def getAll(sort: Option[String]): Seq[User] = {
-    Await.result(UserRepository.getAll(sort), defaultWaitDuration)
+  def getAll(sort: Option[String]): IO[Seq[User]] = {
+    futureToIo(UserRepository.getAll(sort))
   }
 
-  def getById(id: String): Option[User] = {
-    Await.result(UserRepository.getById(id), defaultWaitDuration)
+  def getById(id: String): IO[Option[User]] = {
+    futureToIo(UserRepository.getById(id))
   }
 
-  def updateAge(id: String, age: Int): Option[Unit] = {
+  def updateAge(id: String, age: Int): IO[Either[String, User]] = {
+    logger.info(s"Updating user $id age -> $age")
     getById(id)
-      .map(user => User(user.id, user.username, age))
-      .map(UserRepository.save)
-      .orElse(None)
+      .flatMap {
+        case Some(user) => updateAge(user, age)
+          .map {
+            case Some(user) => Right(user)
+            case None => Left("User was not updated")
+          }
+        case None => IO(Left("User not found"))
+      }
   }
 
-  def delete(id: String): Option[Unit] = {
+  private def updateAge(user: User, age: Int): IO[Option[User]] = {
+    futureToIo(UserRepository.updateAge(user, age))
+      .map(updated => if (updated) Some(User(user.id, user.username, age)) else None)
+  }
+
+  def delete(id: String): IO[Either[String, User]] = {
+    logger.info(s"Deleting user $id")
     getById(id)
-      .map(user => UserRepository.delete(user.id))
-      .orElse(None)
+      .flatMap {
+        case Some(user) => futureToIo(UserRepository.delete(user.id))
+          .map(deleted => if (deleted) Right(user) else Left("User was not deleted"))
+        case None => IO(Left("User not found"))
+      }
+  }
+
+  private def futureToIo[A](f: Future[A]): IO[A] = {
+    IO.fromFuture(IO(f))
   }
 }

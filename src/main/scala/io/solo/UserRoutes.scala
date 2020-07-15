@@ -37,27 +37,34 @@ object UserRoutes {
   def route() = {
     HttpRoutes.of[IO] {
       case GET -> Root / "users" :? SortQueryParamMatcher(sort) =>
-        Ok(UserService.getAll(sort))
+        UserService.getAll(sort)
+          .flatMap(users => Ok(users))
       case req@POST -> Root / "users" =>
-        req.decode((createUser: CreateUserDto) => {
-          UserService.create(createUser.username, createUser.age)
-            .map(user => Ok(user))
-            .getOrElse(Conflict(ErrorResponseDto("Username already in use")))
-        })
+        req.decodeJson[CreateUserDto]
+          .flatMap(UserService.create)
+          .flatMap {
+            case Right(user) => Ok(user)
+            case Left(error) => Conflict(ErrorResponseDto(error))
+          }
       case GET -> Root / "users" / id =>
         UserService.getById(id)
-          .map(user => Ok(user))
-          .getOrElse(BadRequest(ErrorResponseDto("User not found")))
+          .flatMap {
+            case Some(user) => Ok(user)
+            case None => BadRequest(ErrorResponseDto("User not found"))
+          }
       case req@PUT -> Root / "users" / id =>
-        req.decode((updateUser: UpdateUserDto) => {
-          UserService.updateAge(id, updateUser.age)
-            .map(_ => Accepted())
-            .getOrElse(BadRequest(ErrorResponseDto("User not found")))
-        })
+        req.decodeJson[UpdateUserDto]
+          .flatMap(user => UserService.updateAge(id, user.age))
+          .flatMap {
+            case Right(_) => Accepted()
+            case Left(error) => BadRequest(ErrorResponseDto(error))
+          }
       case DELETE -> Root / "users" / id =>
         UserService.delete(id)
-          .map(_ => NoContent())
-          .getOrElse(BadRequest(ErrorResponseDto("User not found")))
+          .flatMap {
+            case Right(_) => NoContent()
+            case Left(error) => BadRequest(ErrorResponseDto(error))
+          }
     }.orNotFound
   }
 }
